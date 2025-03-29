@@ -68,6 +68,7 @@ cover:
 | tilting_time_down      | float        | *Optional*                                      | Time it takes in seconds to tilt the cover all the way down | None    |
 | tilting_time_up        | float        | *Optional*                                      | Time it takes in seconds to tilt the cover all the way up   | None    |
 | is_button              | boolean      | *Optional* (`cover_entity_id` not supported)    | Treats the switches as buttons, only pressing them for 1s   | False   |
+| report_position_update | boolean      | *Optional*                                      | When set to false, disables real-time position updates and reports target position instead | True    |
 
 
 [commits-shield]: https://img.shields.io/github/commit-activity/y/Sese-Schneider/ha-cover-time-based.svg?style=for-the-badge

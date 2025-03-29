@@ -37,6 +37,7 @@ CONF_TRAVELLING_TIME_DOWN = "travelling_time_down"
 CONF_TRAVELLING_TIME_UP = "travelling_time_up"
 CONF_TILTING_TIME_DOWN = "tilting_time_down"
 CONF_TILTING_TIME_UP = "tilting_time_up"
+CONF_REPORT_POSITION_UPDATE = "report_position_update"
 DEFAULT_TRAVEL_TIME = 30
 
 CONF_OPEN_SWITCH_ENTITY_ID = "open_switch_entity_id"
@@ -62,6 +63,7 @@ TRAVEL_TIME_SCHEMA = {
         cv.positive_float, None
     ),
     vol.Optional(CONF_TILTING_TIME_UP, default=None): vol.Any(cv.positive_float, None),
+    vol.Optional(CONF_REPORT_POSITION_UPDATE, default=True): cv.boolean,
 }
 
 SWITCH_COVER_SCHEMA = {
@@ -113,6 +115,7 @@ def devices_from_config(domain_config):
         travel_time_up = config.pop(CONF_TRAVELLING_TIME_UP)
         tilt_time_down = config.pop(CONF_TILTING_TIME_DOWN)
         tilt_time_up = config.pop(CONF_TILTING_TIME_UP)
+        report_position_update = config.pop(CONF_REPORT_POSITION_UPDATE)
 
         open_switch_entity_id = (
             config.pop(CONF_OPEN_SWITCH_ENTITY_ID)
@@ -147,6 +150,7 @@ def devices_from_config(domain_config):
             stop_switch_entity_id,
             is_button,
             cover_entity_id,
+            report_position_update,
         )
         devices.append(device)
     return devices
@@ -180,6 +184,7 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
             stop_switch_entity_id,
             is_button,
             cover_entity_id,
+            report_position_update,
     ):
         """Initialize the cover."""
         self._unique_id = device_id
@@ -195,6 +200,8 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
         self._is_button = is_button
 
         self._cover_entity_id = cover_entity_id
+        self._report_position_update = report_position_update
+        self._target_position = None
 
         if name:
             self._name = name
@@ -218,17 +225,18 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
         old_state = await self.async_get_last_state()
         _LOGGER.debug("async_added_to_hass :: oldState %s", old_state)
         if (
-                old_state is not None
-                and self.travel_calc is not None
-                and old_state.attributes.get(ATTR_CURRENT_POSITION) is not None
+            old_state is not None
+            and self.travel_calc is not None
+            and old_state.attributes.get(ATTR_CURRENT_POSITION) is not None
         ):
-            self.travel_calc.set_position(
-                int(old_state.attributes.get(ATTR_CURRENT_POSITION))
-            )
+            position = int(old_state.attributes.get(ATTR_CURRENT_POSITION))
+            self.travel_calc.set_position(position)
+            if not self._report_position_update:
+                self._target_position = position
 
             if (
-                    self._has_tilt_support()
-                    and old_state.attributes.get(ATTR_CURRENT_TILT_POSITION) is not None
+                self._has_tilt_support()
+                and old_state.attributes.get(ATTR_CURRENT_TILT_POSITION) is not None
             ):
                 self.tilt_calc.set_position(
                     int(old_state.attributes.get(ATTR_CURRENT_TILT_POSITION))
@@ -239,6 +247,9 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
         if self.travel_calc.is_traveling():
             _LOGGER.debug("_handle_stop :: button stops cover movement")
             self.travel_calc.stop()
+            if not self._report_position_update:
+                current_position = self.travel_calc.current_position()
+                self._target_position = 100 - current_position if current_position is not None else None
             self.stop_auto_updater()
 
         if self._has_tilt_support() and self.tilt_calc.is_traveling():
@@ -278,6 +289,8 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
     @property
     def current_cover_position(self) -> int | None:
         """Return the current position of the cover."""
+        if not self._report_position_update and self._target_position is not None:
+            return self._target_position
         current_position = self.travel_calc.current_position()
         # HA has an inverted position logic compared to XKNX
         return 100 - current_position if current_position is not None else None
@@ -367,6 +380,7 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
             self.travel_calc.start_travel_down()
             self.start_auto_updater()
             self._update_tilt_before_travel(SERVICE_CLOSE_COVER)
+            self._target_position = 0
             await self._async_handle_command(SERVICE_CLOSE_COVER)
 
     async def async_open_cover(self, **kwargs):
@@ -377,6 +391,7 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
             self.travel_calc.start_travel_up()
             self.start_auto_updater()
             self._update_tilt_before_travel(SERVICE_OPEN_COVER)
+            self._target_position = 100
             await self._async_handle_command(SERVICE_OPEN_COVER)
 
     async def async_close_cover_tilt(self, **kwargs):
@@ -409,6 +424,7 @@ class CoverTimeBased(CoverEntity, RestoreEntity):
         current_position = self.travel_calc.current_position()
         # HA has an inverted position logic compared to XKNX
         new_position = 100 - position
+        self._target_position = position
         _LOGGER.debug(
             "set_position :: current_position: %d, new_position: %d",
             current_position,
